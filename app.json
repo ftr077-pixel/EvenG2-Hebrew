@@ -1,0 +1,10 @@
+{
+  "name": "עברית",
+  "description": "זיהוי דיבור בעברית - מקליט קול מהמשקפיים ומציג את הטקסט בתצוגה",
+  "version": "1.0.0",
+  "author": "EvenG2-Hebrew",
+  "entry": "index.html",
+  "icon": "assets/icon.png",
+  "permissions": ["microphone"],
+  "category": "productivity"
+}
