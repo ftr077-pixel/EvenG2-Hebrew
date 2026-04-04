@@ -1,135 +1,179 @@
 /**
- * Audio utilities for Even G2 Hebrew speech recognition.
+ * Deepgram streaming transcription for Even G2 Hebrew speech recognition.
  *
- * The Even Hub SDK delivers microphone audio as raw PCM bytes via
- * audioEvent.audioPcm.  This module collects those bytes, encodes them
- * as a standard WAV file, and sends the file to the OpenAI Whisper API
- * requesting Hebrew (he) transcription.
+ * Uses Deepgram's real-time WebSocket API so Hebrew text appears on the
+ * glasses display live as the user speaks — no waiting until recording ends.
  *
- * Assumed PCM format delivered by the G2 SDK:
+ * PCM format assumed from the G2 SDK:
  *   - Sample rate : 16 000 Hz
  *   - Bit depth   : 16-bit signed, little-endian
  *   - Channels    : mono
- */
-
-const SAMPLE_RATE = 16_000;
-const BIT_DEPTH = 16;
-const CHANNELS = 1;
-
-// Hard limit so the Whisper request stays well below the 25 MB API cap.
-export const MAX_RECORDING_SECONDS = 30;
-export const MAX_PCM_BYTES = SAMPLE_RATE * (BIT_DEPTH / 8) * CHANNELS * MAX_RECORDING_SECONDS;
-
-// ---------------------------------------------------------------------------
-// PCM → WAV
-// ---------------------------------------------------------------------------
-
-function writeString(view: DataView, offset: number, str: string): void {
-  for (let i = 0; i < str.length; i++) {
-    view.setUint8(offset + i, str.charCodeAt(i));
-  }
-}
-
-/**
- * Wraps a raw PCM byte array in a WAV container (RIFF/WAVE format).
- * The caller is responsible for ensuring the bytes match SAMPLE_RATE,
- * BIT_DEPTH, and CHANNELS declared above.
- */
-export function pcmToWav(pcmBytes: number[]): Blob {
-  const byteRate = (SAMPLE_RATE * CHANNELS * BIT_DEPTH) / 8;
-  const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
-  const dataSize = pcmBytes.length;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  // RIFF chunk descriptor
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(view, 8, 'WAVE');
-
-  // fmt sub-chunk
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);          // sub-chunk size (PCM = 16)
-  view.setUint16(20, 1, true);           // AudioFormat: PCM = 1
-  view.setUint16(22, CHANNELS, true);
-  view.setUint32(24, SAMPLE_RATE, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, BIT_DEPTH, true);
-
-  // data sub-chunk
-  writeString(view, 36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  // PCM payload
-  const dst = new Uint8Array(buffer, 44);
-  pcmBytes.forEach((b, i) => { dst[i] = b; });
-
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-// ---------------------------------------------------------------------------
-// Whisper transcription
-// ---------------------------------------------------------------------------
-
-export class TranscriptionError extends Error {
-  constructor(
-    message: string,
-    public readonly status?: number,
-  ) {
-    super(message);
-    this.name = 'TranscriptionError';
-  }
-}
-
-/**
- * Sends a WAV blob to OpenAI Whisper and returns the Hebrew transcription.
  *
- * @param wavBlob  - WAV audio produced by pcmToWav()
- * @param apiKey   - OpenAI API key (VITE_OPENAI_API_KEY)
- * @returns        Transcribed text in Hebrew
- * @throws         TranscriptionError on API or network failure
+ * Browser auth: Deepgram accepts the API key as a WebSocket sub-protocol
+ * ("token", apiKey) because browsers cannot set custom HTTP headers on WS.
  */
-export async function transcribeHebrew(wavBlob: Blob, apiKey: string): Promise<string> {
-  if (!apiKey) {
-    throw new TranscriptionError(
-      'מפתח API חסר — הגדר VITE_OPENAI_API_KEY בקובץ .env',
-    );
+
+export const MAX_RECORDING_SECONDS = 30;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface DeepgramAlternative {
+  transcript?: string;
+  confidence?: number;
+}
+
+interface DeepgramResult {
+  type?: string;
+  is_final?: boolean;
+  speech_final?: boolean;
+  channel?: { alternatives?: DeepgramAlternative[] };
+}
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
+export class DeepgramError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeepgramError';
   }
+}
 
-  const form = new FormData();
-  form.append('file', wavBlob, 'recording.wav');
-  form.append('model', 'whisper-1');
-  form.append('language', 'he');          // force Hebrew
-  form.append('response_format', 'json');
+// ---------------------------------------------------------------------------
+// Streamer
+// ---------------------------------------------------------------------------
 
-  let res: Response;
-  try {
-    res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-    });
-  } catch (err) {
-    throw new TranscriptionError(
-      `שגיאת רשת: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+/**
+ * Opens a Deepgram streaming WebSocket, forwards PCM audio chunks, and
+ * exposes interim transcripts via onInterim.
+ *
+ * Usage:
+ *   const s = new DeepgramStreamer();
+ *   s.onInterim = (text) => ui.setInterimText(text);
+ *   await s.connect(apiKey);
+ *   // …send chunks…
+ *   const finalText = await s.finish();
+ */
+export class DeepgramStreamer {
+  /** Called with the running transcript on every Deepgram Results event. */
+  onInterim: (text: string) => void = () => undefined;
 
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = (await res.json()) as { error?: { message?: string } };
-      detail = body.error?.message ?? '';
-    } catch {
-      // ignore JSON parse errors
+  private ws: WebSocket | null = null;
+  private confirmed = '';   // accumulated is_final segments
+
+  // ---------------------------------------------------------------------------
+  // Connect
+  // ---------------------------------------------------------------------------
+
+  connect(apiKey: string): Promise<void> {
+    if (!apiKey) {
+      return Promise.reject(
+        new DeepgramError('מפתח Deepgram חסר — הגדר VITE_DEEPGRAM_API_KEY בקובץ .env'),
+      );
     }
-    throw new TranscriptionError(
-      `Whisper API נכשל (${res.status})${detail ? `: ${detail}` : ''}`,
-      res.status,
-    );
+
+    return new Promise((resolve, reject) => {
+      const params = new URLSearchParams({
+        model: 'nova-2',
+        language: 'he',
+        encoding: 'linear16',
+        sample_rate: '16000',
+        channels: '1',
+        interim_results: 'true',
+        punctuate: 'true',
+        smart_format: 'true',
+      });
+
+      // Deepgram browser auth: pass token as WebSocket sub-protocol
+      this.ws = new WebSocket(
+        `wss://api.deepgram.com/v1/listen?${params.toString()}`,
+        ['token', apiKey],
+      );
+      this.ws.binaryType = 'arraybuffer';
+
+      this.ws.onopen = () => resolve();
+      this.ws.onerror = () =>
+        reject(new DeepgramError('חיבור ל-Deepgram נכשל — בדוק את מפתח ה-API וחיבור הרשת'));
+      this.ws.onmessage = (ev: MessageEvent<string>) => this.handleMessage(ev);
+    });
   }
 
-  const data = (await res.json()) as { text?: string };
-  return (data.text ?? '').trim();
+  // ---------------------------------------------------------------------------
+  // Send PCM
+  // ---------------------------------------------------------------------------
+
+  /** Forward a raw PCM byte chunk from the G2 microphone to Deepgram. */
+  sendPcm(bytes: number[]): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(new Uint8Array(bytes));
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Finish
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Signals end-of-stream, waits for Deepgram to flush remaining audio,
+   * and returns the complete final transcript.
+   */
+  finish(): Promise<string> {
+    return new Promise((resolve) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        resolve(this.confirmed);
+        return;
+      }
+
+      // Resolve once the server closes the connection (or after timeout).
+      const done = () => resolve(this.confirmed);
+      const timer = setTimeout(done, 5_000);
+
+      this.ws.addEventListener('close', () => {
+        clearTimeout(timer);
+        done();
+      });
+
+      try {
+        this.ws.send(JSON.stringify({ type: 'CloseStream' }));
+      } catch {
+        clearTimeout(timer);
+        done();
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal message handler
+  // ---------------------------------------------------------------------------
+
+  private handleMessage(ev: MessageEvent<string>): void {
+    let data: DeepgramResult;
+    try {
+      data = JSON.parse(ev.data) as DeepgramResult;
+    } catch {
+      return;
+    }
+
+    if (data.type !== 'Results') return;
+
+    const transcript = data.channel?.alternatives?.[0]?.transcript ?? '';
+
+    if (data.is_final && transcript) {
+      // Append to the confirmed transcript
+      this.confirmed = this.confirmed
+        ? `${this.confirmed} ${transcript}`
+        : transcript;
+    }
+
+    // Emit running display: confirmed finals + current partial (if any)
+    const partial = data.is_final ? '' : transcript;
+    const display = partial
+      ? `${this.confirmed} ${partial}`.trim()
+      : this.confirmed;
+
+    if (display) this.onInterim(display);
+  }
 }

@@ -1,38 +1,41 @@
 /**
- * Even G2 — Hebrew Speech Recognition App
+ * Even G2 — Hebrew Speech Recognition App (Deepgram)
  *
  * Flow
  * ────
  * 1. Connect to the Even Hub bridge (waitForEvenAppBridge)
  * 2. Initialise the glasses display (idle state, "הקלט" action)
- * 3. User selects "הקלט" → microphone is enabled, PCM bytes are buffered
- * 4. User selects "עצור" (or MAX_RECORDING_SECONDS elapses) →
+ * 3. User selects "הקלט":
+ *    a. Open Deepgram streaming WebSocket (nova-2, language=he)
+ *    b. Enable G2 microphone
+ *    c. PCM chunks are forwarded to Deepgram in real-time
+ *    d. Interim Hebrew transcripts appear on the glasses display live
+ * 4. User selects "עצור" (or 30 s elapses):
  *    a. Microphone disabled
- *    b. PCM bytes encoded as WAV
- *    c. Sent to OpenAI Whisper with language=he
- *    d. Transcription shown on display
- * 5. User can record again or clear the result
+ *    b. CloseStream sent to Deepgram; final transcript collected
+ *    c. Result shown on display
+ * 5. User can record again or clear
  *
  * Configuration
  * ─────────────
- * Copy .env.example → .env and set VITE_OPENAI_API_KEY before building.
+ * Copy .env.example → .env and set VITE_DEEPGRAM_API_KEY before building.
  */
 
 import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk';
 import type { EvenAppBridge } from '@evenrealities/even_hub_sdk';
-import { pcmToWav, transcribeHebrew, TranscriptionError, MAX_PCM_BYTES } from './audio';
+import { DeepgramStreamer, DeepgramError, MAX_RECORDING_SECONDS } from './audio';
 import { GlassesUI } from './ui';
 
-// Injected at build-time by Vite (see .env / .env.example)
-const OPENAI_API_KEY: string = import.meta.env['VITE_OPENAI_API_KEY'] ?? '';
+const DEEPGRAM_API_KEY: string = import.meta.env['VITE_DEEPGRAM_API_KEY'] ?? '';
 
 // ---------------------------------------------------------------------------
 // App controller
 // ---------------------------------------------------------------------------
 
 class HebrewSpeechApp {
-  private pcmBuffer: number[] = [];
+  private streamer: DeepgramStreamer | null = null;
   private stopRequested = false;
+  private autoStopTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly bridge: EvenAppBridge,
@@ -44,57 +47,71 @@ class HebrewSpeechApp {
   // ---------------------------------------------------------------------------
 
   private async startRecording(): Promise<void> {
-    this.pcmBuffer = [];
     this.stopRequested = false;
+
+    // Create and connect the Deepgram streamer before enabling the mic so
+    // audio chunks don't arrive before the WebSocket is ready.
+    const s = new DeepgramStreamer();
+    s.onInterim = (text) => { this.ui.setInterimText(text); };
+
+    try {
+      await s.connect(DEEPGRAM_API_KEY);
+    } catch (err) {
+      const msg = err instanceof DeepgramError
+        ? err.message
+        : `שגיאת חיבור: ${err instanceof Error ? err.message : String(err)}`;
+      await this.ui.setError(msg);
+      return;
+    }
+
+    this.streamer = s;
+
+    // Auto-stop after MAX_RECORDING_SECONDS
+    this.autoStopTimer = setTimeout(() => { void this.stopRecording(); }, MAX_RECORDING_SECONDS * 1_000);
+
     await this.ui.setRecording();
     await this.bridge.audioControl(true);
   }
 
   private async stopRecording(): Promise<void> {
-    if (this.stopRequested) return;   // guard against double-stop
+    if (this.stopRequested) return;
     this.stopRequested = true;
 
-    await this.bridge.audioControl(false);
-    await this.transcribeBuffer();
-  }
+    if (this.autoStopTimer !== null) {
+      clearTimeout(this.autoStopTimer);
+      this.autoStopTimer = null;
+    }
 
-  private async transcribeBuffer(): Promise<void> {
+    await this.bridge.audioControl(false);
     await this.ui.setProcessing();
 
-    if (this.pcmBuffer.length === 0) {
-      await this.ui.setError('לא הוקלט שמע');
+    let text = '';
+    try {
+      text = (await this.streamer?.finish()) ?? '';
+    } catch (err) {
+      const msg = err instanceof DeepgramError
+        ? err.message
+        : `שגיאה: ${err instanceof Error ? err.message : String(err)}`;
+      await this.ui.setError(msg);
+      this.streamer = null;
       return;
     }
 
-    try {
-      const wav = pcmToWav(this.pcmBuffer);
-      const text = await transcribeHebrew(wav, OPENAI_API_KEY);
-      await this.ui.setResult(text);
-    } catch (err) {
-      const message =
-        err instanceof TranscriptionError
-          ? err.message
-          : `שגיאה: ${err instanceof Error ? err.message : String(err)}`;
-      await this.ui.setError(message);
-    }
+    this.streamer = null;
+    await this.ui.setResult(text);
   }
 
   // ---------------------------------------------------------------------------
   // Event handling
   // ---------------------------------------------------------------------------
 
-  /** Called for every event from the bridge. */
-  async handleEvent(event: Parameters<Parameters<EvenAppBridge['onEvenHubEvent']>[0]>[0]): Promise<void> {
-    // ── Audio PCM ──────────────────────────────────────────────────────────
+  async handleEvent(
+    event: Parameters<Parameters<EvenAppBridge['onEvenHubEvent']>[0]>[0],
+  ): Promise<void> {
+    // ── Audio PCM → forward to Deepgram ───────────────────────────────────
     if (event.audioEvent?.audioPcm) {
       if (this.ui.getState() === 'recording' && !this.stopRequested) {
-        const chunk = event.audioEvent.audioPcm as number[];
-        this.pcmBuffer.push(...chunk);
-
-        // Auto-stop when buffer reaches the max duration limit
-        if (this.pcmBuffer.length >= MAX_PCM_BYTES) {
-          await this.stopRecording();
-        }
+        this.streamer?.sendPcm(event.audioEvent.audioPcm as number[]);
       }
     }
 
@@ -115,11 +132,9 @@ class HebrewSpeechApp {
 
       } else if (state === 'result' || state === 'error') {
         if (idx === 0) {
-          // "הקלט שוב" / "הקלט"
           await this.ui.setIdle();
           await this.startRecording();
         } else if (idx === 1) {
-          // "נקה"
           await this.ui.setIdle();
         }
       }
@@ -129,6 +144,7 @@ class HebrewSpeechApp {
     if (event.sysEvent?.exit) {
       if (this.ui.getState() === 'recording') {
         await this.bridge.audioControl(false);
+        this.streamer?.finish().catch(() => undefined);
       }
       await this.bridge.shutDownPageContainer();
     }
@@ -140,9 +156,7 @@ class HebrewSpeechApp {
 
   async start(): Promise<void> {
     await this.ui.init();
-    this.bridge.onEvenHubEvent((event) => {
-      void this.handleEvent(event);
-    });
+    this.bridge.onEvenHubEvent((event) => { void this.handleEvent(event); });
   }
 }
 

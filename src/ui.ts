@@ -77,6 +77,7 @@ export class GlassesUI {
   private state: AppState = 'idle';
   private resultText = '';
   private errorText = '';
+  private interimText = '';   // live Deepgram transcript during recording
   private recordingSeconds = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private initialized = false;
@@ -96,8 +97,16 @@ export class GlassesUI {
   async setRecording(): Promise<void> {
     this.state = 'recording';
     this.recordingSeconds = 0;
+    this.interimText = '';
     this.startTimer();
     await this.render();
+  }
+
+  /** Update the live transcription shown while recording. Does not change state. */
+  setInterimText(text: string): void {
+    if (this.state !== 'recording') return;
+    this.interimText = text;
+    void this.render();
   }
 
   async setProcessing(): Promise<void> {
@@ -147,8 +156,12 @@ export class GlassesUI {
         return buildPage('מוכן להקלטה', [ACTIONS.record]);
 
       case 'recording': {
+        // Show live interim transcript when Deepgram has recognised something,
+        // otherwise show the timer so the user knows recording is active.
         const remaining = MAX_RECORDING_SECONDS - this.recordingSeconds;
-        const text = `מקליט... ${this.recordingSeconds}ש׳ (נותרו ${remaining}ש׳)`;
+        const text = this.interimText
+          ? this.interimText
+          : `מקליט... ${this.recordingSeconds}ש׳ (נותרו ${remaining}ש׳)`;
         return buildPage(text, [ACTIONS.stop]);
       }
 
