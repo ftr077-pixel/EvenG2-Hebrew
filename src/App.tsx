@@ -14,21 +14,31 @@
  *             → useGlasses display renderer
  *               → G2 monochrome HUD
  *
+ * Additional layers:
+ *   Session end → Claude AI (claude-opus-4-6) → Hebrew summary → HUD flash + Dashboard
+ *   All sessions → localStorage (src/storage.ts)
+ *   Phone screen → Dashboard (src/Dashboard.tsx)
+ *
  * Glass controls (tap/ring/keyboard all map to the same GlassAction):
  *   SELECT  — idle: start session  |  listening: stop session
  *             idle+history: record again  |  idle+history+move: clear
  *   MOVE    — scroll action highlight (הקלט שוב ↔ נקה)
  */
 
-import { useMemo, useRef, useCallback } from 'react';
+import { useMemo, useRef, useCallback, useState, useEffect } from 'react';
 import { useGlasses } from 'even-toolkit/useGlasses';
 import { moveHighlight } from 'even-toolkit/glass-nav';
 import type { GlassNavState, GlassAction } from 'even-toolkit';
 import { useDiarizedSTT } from './deepgram';
 import { toDisplayData } from './display';
 import type { AppSnapshot } from './types';
+import { summarizeTranscript } from './summarize';
+import { loadSessions, saveSession, deleteSession, clearAllSessions, newSessionId } from './storage';
+import type { Session } from './storage';
+import { Dashboard } from './Dashboard';
 
-const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY ?? '';
+const DEEPGRAM_API_KEY   = import.meta.env.VITE_DEEPGRAM_API_KEY   ?? '';
+const ANTHROPIC_API_KEY  = import.meta.env.VITE_ANTHROPIC_API_KEY  ?? '';
 
 export default function App() {
   // ── Diarized speech-to-text ────────────────────────────────────────────────
@@ -36,23 +46,90 @@ export default function App() {
   const sttRef = useRef(stt);
   sttRef.current = stt;
 
-  // ── Stable snapshot (reference-stable between polls) ──────────────────────
+  // ── Summarization state ───────────────────────────────────────────────────
+  const [summarizing, setSummarizing] = useState(false);
+  const [summary, setSummary]         = useState<string | null>(null);
+
+  // Derive effective sttState (adds 'summarizing' pseudo-state for HUD)
+  const effectiveSttState = useMemo<AppSnapshot['sttState']>(() => {
+    if (summarizing) return 'summarizing';
+    return stt.sttState;
+  }, [summarizing, stt.sttState]);
+
+  // ── Session storage ────────────────────────────────────────────────────────
+  const [sessions, setSessions] = useState<Session[]>(() => loadSessions());
+  const sessionIdRef = useRef<string | null>(null);
+
+  // Refresh sessions from storage whenever we save
+  const refreshSessions = useCallback(() => setSessions(loadSessions()), []);
+
+  // ── Stable snapshot ───────────────────────────────────────────────────────
   const snap = useMemo<AppSnapshot>(() => {
     const hasContent = stt.segments.length > 0;
+    const state = effectiveSttState;
     return {
-      sttState: stt.sttState,
+      sttState: state,
       segments: stt.segments,
       interim: stt.interim,
       hasContent,
       error: stt.error,
-      numActions: hasContent && stt.sttState === 'idle' ? 2 : 1,
+      summary,
+      numActions: hasContent && (state === 'idle') ? 2 : 1,
     };
-  }, [stt.sttState, stt.segments, stt.interim, stt.error]);
+  }, [effectiveSttState, stt.segments, stt.interim, stt.error, summary]);
 
   const snapRef = useRef(snap);
   snapRef.current = snap;
 
-  // ── Glass action handler ───────────────────────────────────────────────────
+  // ── Summarize and store a completed session ───────────────────────────────
+  const summarizeAndStore = useCallback(async (segments: typeof stt.segments) => {
+    if (segments.length === 0) return;
+
+    const id = sessionIdRef.current ?? newSessionId();
+    sessionIdRef.current = id;
+
+    // Save immediately without summary
+    const partial: Session = {
+      id,
+      startedAt: new Date().toISOString(),
+      segments,
+      summary: null,
+    };
+    saveSession(partial);
+    refreshSessions();
+
+    if (!ANTHROPIC_API_KEY) return; // skip summarization if no key
+
+    setSummarizing(true);
+    setSummary(null);
+
+    try {
+      const result = await summarizeTranscript(segments, ANTHROPIC_API_KEY);
+      setSummary(result);
+
+      // Update stored session with summary
+      saveSession({ ...partial, summary: result });
+      refreshSessions();
+    } catch {
+      // Non-fatal — transcript is saved without summary
+    } finally {
+      setSummarizing(false);
+    }
+  }, [refreshSessions]);
+
+  // ── Handle session lifecycle ───────────────────────────────────────────────
+  // When sttState transitions from listening → idle, trigger summarization
+  const prevSttStateRef = useRef(stt.sttState);
+  useEffect(() => {
+    const prev = prevSttStateRef.current;
+    prevSttStateRef.current = stt.sttState;
+
+    if (prev === 'listening' && stt.sttState === 'idle') {
+      void summarizeAndStore(stt.segments);
+    }
+  }, [stt.sttState, stt.segments, summarizeAndStore]);
+
+  // ── Glass action handler ──────────────────────────────────────────────────
   const onGlassAction = useCallback((
     action: GlassAction,
     nav: GlassNavState,
@@ -74,7 +151,6 @@ export default function App() {
     if (action.type === 'SELECT_HIGHLIGHTED') {
       switch (cur.sttState) {
         case 'listening':
-          // Stop the session — Deepgram flushes final segments before closing
           s.stop();
           break;
 
@@ -82,13 +158,19 @@ export default function App() {
           if (cur.hasContent) {
             if (nav.highlightedIndex === 0) {
               // "הקלט שוב" — keep history, start new session
+              sessionIdRef.current = newSessionId();
+              setSummary(null);
               void s.start();
             } else {
               // "נקה" — wipe history
               s.reset();
+              setSummary(null);
+              sessionIdRef.current = null;
             }
           } else {
-            // "התחל" — begin first session
+            // "התחל"
+            sessionIdRef.current = newSessionId();
+            setSummary(null);
             void s.start();
           }
           break;
@@ -96,9 +178,13 @@ export default function App() {
         case 'error':
           if (nav.highlightedIndex === 0) {
             s.reset();
-            void s.start();     // "נסה שוב"
+            setSummary(null);
+            sessionIdRef.current = newSessionId();
+            void s.start();
           } else {
-            s.reset();          // "נקה"
+            s.reset();
+            setSummary(null);
+            sessionIdRef.current = null;
           }
           break;
       }
@@ -108,7 +194,7 @@ export default function App() {
     return nav;
   }, []);
 
-  // ── Glasses bridge ─────────────────────────────────────────────────────────
+  // ── Glasses bridge ────────────────────────────────────────────────────────
   useGlasses<AppSnapshot>({
     appName: 'עברית',
     getSnapshot: () => snapRef.current,
@@ -117,5 +203,27 @@ export default function App() {
     onGlassAction,
   });
 
-  return null; // glasses-only app
+  // ── Dashboard (phone screen) ──────────────────────────────────────────────
+  const handleDeleteSession = useCallback((id: string) => {
+    deleteSession(id);
+    refreshSessions();
+  }, [refreshSessions]);
+
+  const handleClearAll = useCallback(() => {
+    clearAllSessions();
+    refreshSessions();
+  }, [refreshSessions]);
+
+  return (
+    <Dashboard
+      liveSegments={stt.segments}
+      liveInterim={stt.interim}
+      sttState={stt.sttState}
+      summary={summary}
+      summarizing={summarizing}
+      sessions={sessions}
+      onDeleteSession={handleDeleteSession}
+      onClearAll={handleClearAll}
+    />
+  );
 }

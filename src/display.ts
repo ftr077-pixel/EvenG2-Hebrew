@@ -21,6 +21,7 @@ import { line } from 'even-toolkit';
 import { buildScrollableList } from 'even-toolkit/glass-display-builders';
 import type { AppSnapshot, DiarizedSegment } from './types';
 
+
 const CHARS_PER_LINE = 28;
 const TRANSCRIPT_LINES = 8; // rows reserved for conversation (2 for actions)
 
@@ -105,6 +106,18 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
     return { lines: [line('מתחבר לשירות...')] };
   }
 
+  // ── Summarizing ────────────────────────────────────────────────────────────
+  if (snap.sttState === 'summarizing') {
+    return {
+      lines: [
+        line(''),
+        line('מסכם עם AI...', 'meta'),
+        line(''),
+        line('אנא המתן', 'meta'),
+      ],
+    };
+  }
+
   // ── Error ──────────────────────────────────────────────────────────────────
   if (snap.sttState === 'error') {
     const errLines = wrapText(snap.error ?? 'שגיאה לא ידועה', 6);
@@ -141,6 +154,25 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
 
   // ── Idle with conversation history ────────────────────────────────────────
   if (snap.hasContent) {
+    // If a summary exists, show it instead of the raw transcript
+    if (snap.summary) {
+      const summaryLines = wrapText(snap.summary, 6);
+      const pad = Math.max(0, 8 - summaryLines.length);
+      return {
+        lines: [
+          ...summaryLines.map(t => line(t, 'normal')),
+          ...Array.from({ length: pad }, () => line('')),
+          line(''),
+          ...buildScrollableList({
+            items: ['הקלט שוב', 'נקה'],
+            highlightedIndex: nav.highlightedIndex,
+            maxVisible: 2,
+            formatter: a => a,
+          }),
+        ],
+      };
+    }
+
     const transcriptLines = segmentsToLines(snap.segments, [], TRANSCRIPT_LINES);
     const pad = Math.max(0, TRANSCRIPT_LINES - transcriptLines.length);
     return {
