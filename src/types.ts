@@ -1,19 +1,25 @@
+import type { DiarizedSegment } from './deepgram';
+
+export type { DiarizedSegment };
+
 /**
- * Shared snapshot type for the Hebrew speech app.
- * Passed to both toDisplayData() and onGlassAction() by useGlasses.
+ * Snapshot passed from App → useGlasses → toDisplayData / onGlassAction.
+ *
+ * Reflects the spec's "pipeline state":
+ *   idle       — no active session
+ *   connecting — Deepgram WS opening + G2 mic starting
+ *   listening  — streaming audio, segments accumulating
+ *   error      — connection or mic failure
  */
 export interface AppSnapshot {
-  /** STT engine state */
-  state: 'idle' | 'loading' | 'listening' | 'processing' | 'error';
-  /** Accumulated final transcript */
-  transcript: string;
-  /** Current interim (partial) transcript from Deepgram */
-  interimTranscript: string;
-  /** Convenience flags derived from state */
-  isListening: boolean;
-  isLoading: boolean;
-  /** Error message when state === 'error' */
-  errorMsg: string | null;
-  /** Number of selectable actions on the current screen (for HIGHLIGHT_MOVE clamping) */
+  sttState: 'idle' | 'connecting' | 'listening' | 'error';
+  /** All confirmed (is_final) diarized segments for the session */
+  segments: DiarizedSegment[];
+  /** Live partial segments for the current utterance */
+  interim: DiarizedSegment[];
+  /** True when there is conversation history to display */
+  hasContent: boolean;
+  error: string | null;
+  /** Number of selectable action items (for HIGHLIGHT_MOVE clamping) */
   numActions: number;
 }

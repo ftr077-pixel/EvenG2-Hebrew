@@ -1,78 +1,64 @@
 /**
- * Even G2 — Hebrew Speech App (even-toolkit edition)
+ * Even G2 — Hebrew Meeting Transcription App
  *
- * Architecture
- * ─────────────
- * useGlasses  — initialises the Even Hub bridge, polls snapshot every 100 ms,
- *               renders display lines, and dispatches glass actions (tap/scroll).
- *               Stores the bridge at window.__evenBridge for the STT source.
+ * Implements the spec's Edge + Brain layers directly in the Even Hub WebView.
+ * (The "Bridge / Companion Phone" layer is the Even Hub native app itself,
+ *  which manages BLE 5.4 and routes audio from the glasses to this WebView.)
  *
- * useSTT      — wraps Deepgram streaming via GlassBridgeSource, which reads
- *               window.__evenBridge to open/close the G2 microphone and
- *               forward PCM audio chunks to the Deepgram WebSocket.
- *               Emits interimTranscript live and transcript on stop.
+ * Data pipeline:
+ *   G2 4-mic array
+ *     → GlassBridgeSource (even-toolkit) — Float32 PCM @ 16 kHz
+ *       → f32ToI16 conversion
+ *         → Deepgram nova-2 WebSocket (language=he, diarize=true)
+ *           → DiarizedSegments ([אני] / [ד2])
+ *             → useGlasses display renderer
+ *               → G2 monochrome HUD
  *
- * Glass flow
- * ──────────
- * 1. idle     → user presses SELECT → start() called → Deepgram WS opens,
- *               mic enabled
- * 2. listening → interim Hebrew text appears on display in real-time
- * 3. user presses SELECT (עצור) → stop() called → Deepgram flushes finals,
- *               mic disabled
- * 4. result   → highlight between [הקלט שוב] and [נקה]
+ * Glass controls (tap/ring/keyboard all map to the same GlassAction):
+ *   SELECT  — idle: start session  |  listening: stop session
+ *             idle+history: record again  |  idle+history+move: clear
+ *   MOVE    — scroll action highlight (הקלט שוב ↔ נקה)
  */
 
 import { useMemo, useRef, useCallback } from 'react';
 import { useGlasses } from 'even-toolkit/useGlasses';
-import { useSTT } from 'even-toolkit/stt/react';
 import { moveHighlight } from 'even-toolkit/glass-nav';
 import type { GlassNavState, GlassAction } from 'even-toolkit';
+import { useDiarizedSTT } from './deepgram';
 import { toDisplayData } from './display';
 import type { AppSnapshot } from './types';
 
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY ?? '';
 
 export default function App() {
-  // ── Speech-to-text ─────────────────────────────────────────────────────────
-  // source: 'glass-bridge' → GlassBridgeSource uses window.__evenBridge
-  // (set by useGlasses on init) to control the G2 mic and receive PCM audio.
-  const stt = useSTT({
-    provider: 'deepgram',
-    source: 'glass-bridge',
-    language: 'he',
-    apiKey: DEEPGRAM_API_KEY,
-    continuous: false,
-  });
-
-  // Keep an always-current ref so onGlassAction (stable callback) can read stt
+  // ── Diarized speech-to-text ────────────────────────────────────────────────
+  const stt = useDiarizedSTT(DEEPGRAM_API_KEY);
   const sttRef = useRef(stt);
   sttRef.current = stt;
 
-  // ── Snapshot ────────────────────────────────────────────────────────────────
-  // useMemo keeps the same object reference until the listed deps change.
-  // useGlasses polls getSnapshot() every 100 ms and only re-renders the display
-  // when the reference changes — this prevents spurious redraws.
-  const snap = useMemo<AppSnapshot>(() => ({
-    state: stt.state,
-    transcript: stt.transcript,
-    interimTranscript: stt.interimTranscript,
-    isListening: stt.isListening,
-    isLoading: stt.isLoading,
-    errorMsg: stt.error?.message ?? null,
-    numActions: stt.transcript ? 2 : 1,
-  }), [stt.state, stt.transcript, stt.interimTranscript, stt.isListening, stt.isLoading, stt.error]);
+  // ── Stable snapshot (reference-stable between polls) ──────────────────────
+  const snap = useMemo<AppSnapshot>(() => {
+    const hasContent = stt.segments.length > 0;
+    return {
+      sttState: stt.sttState,
+      segments: stt.segments,
+      interim: stt.interim,
+      hasContent,
+      error: stt.error,
+      numActions: hasContent && stt.sttState === 'idle' ? 2 : 1,
+    };
+  }, [stt.sttState, stt.segments, stt.interim, stt.error]);
 
   const snapRef = useRef(snap);
   snapRef.current = snap;
 
-  // ── Action handler ──────────────────────────────────────────────────────────
+  // ── Glass action handler ───────────────────────────────────────────────────
   const onGlassAction = useCallback((
     action: GlassAction,
     nav: GlassNavState,
-    _snap: AppSnapshot,       // same as snapRef.current; use ref for freshness
   ): GlassNavState => {
-    const s = sttRef.current;
-    const curr = snapRef.current;
+    const s   = sttRef.current;
+    const cur = snapRef.current;
 
     if (action.type === 'HIGHLIGHT_MOVE') {
       return {
@@ -80,36 +66,41 @@ export default function App() {
         highlightedIndex: moveHighlight(
           nav.highlightedIndex,
           action.direction,
-          curr.numActions - 1,
+          cur.numActions - 1,
         ),
       };
     }
 
     if (action.type === 'SELECT_HIGHLIGHTED') {
-      if (s.isListening) {
-        // Stop recording — Deepgram will flush remaining audio and emit finals
-        s.stop();
-      } else if (curr.transcript) {
-        if (nav.highlightedIndex === 0) {
-          // "הקלט שוב" — clear result and start a new recording
-          s.reset();
-          void s.start();
-        } else {
-          // "נקה" — clear result, return to idle
-          s.reset();
-        }
-      } else if (curr.state === 'error') {
-        if (nav.highlightedIndex === 0) {
-          // "נסה שוב"
-          s.reset();
-          void s.start();
-        } else {
-          // "נקה"
-          s.reset();
-        }
-      } else if (!s.isLoading) {
-        // "הקלט" — start recording
-        void s.start();
+      switch (cur.sttState) {
+        case 'listening':
+          // Stop the session — Deepgram flushes final segments before closing
+          s.stop();
+          break;
+
+        case 'idle':
+          if (cur.hasContent) {
+            if (nav.highlightedIndex === 0) {
+              // "הקלט שוב" — keep history, start new session
+              void s.start();
+            } else {
+              // "נקה" — wipe history
+              s.reset();
+            }
+          } else {
+            // "התחל" — begin first session
+            void s.start();
+          }
+          break;
+
+        case 'error':
+          if (nav.highlightedIndex === 0) {
+            s.reset();
+            void s.start();     // "נסה שוב"
+          } else {
+            s.reset();          // "נקה"
+          }
+          break;
       }
       return { ...nav, highlightedIndex: 0 };
     }
@@ -126,6 +117,5 @@ export default function App() {
     onGlassAction,
   });
 
-  // Glasses-only app — no web UI
-  return null;
+  return null; // glasses-only app
 }

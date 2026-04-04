@@ -1,61 +1,113 @@
 /**
- * Builds the glasses display for each app state.
+ * Glasses display builder — implements the spec's "HUD Display Logic".
  *
- * Used as the `toDisplayData` callback in useGlasses().
- * even-toolkit renders these DisplayLines as text on the G2 (10 lines max).
+ * Speaker formatting (monochrome constraints — no colour, use typography):
+ *   Speaker 0 (wearer)  → normal style, prefix "אני: "
+ *   Speaker 1+          → meta style (visually dimmer), prefix "ד2: ", "ד3: " …
+ *
+ * The conversation history scrolls upward as new segments arrive, keeping
+ * the most recent speech at the bottom of the 10-line display.
  *
  * States:
- *   idle       — "מוכן להקלטה" + single [הקלט] action
- *   loading    — "מתחבר לשירות..."
- *   listening  — live interim transcript (Deepgram) + [עצור] action at bottom
- *   processing — "מעבד..." (batch flush; rare for Deepgram streaming)
- *   error      — error message + [נסה שוב | נקה]
- *   result     — final transcript + [הקלט שוב | נקה]
+ *   idle (no history)  — "מוכן להקלטה"  +  [התחל]
+ *   idle (has history) — transcript view  +  [הקלט שוב | נקה]
+ *   connecting         — "מתחבר..."
+ *   listening          — live conversation (confirmed + interim) + [עצור]
+ *   error              — error message  +  [נסה שוב | נקה]
  */
 
-import type { DisplayData, GlassNavState } from 'even-toolkit';
+import type { DisplayData, GlassNavState, LineStyle } from 'even-toolkit';
 import { line } from 'even-toolkit';
 import { buildScrollableList } from 'even-toolkit/glass-display-builders';
-import type { AppSnapshot } from './types';
+import type { AppSnapshot, DiarizedSegment } from './types';
 
-/** Max chars per display line before we soft-wrap */
 const CHARS_PER_LINE = 28;
+const TRANSCRIPT_LINES = 8; // rows reserved for conversation (2 for actions)
 
-/** Word-wrap a string into display lines of ≤ CHARS_PER_LINE characters. */
-function wrapText(text: string, maxLines = 8): string[] {
+// ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+function wrapText(text: string, maxLines: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
-  const result: string[] = [];
-  let current = '';
+  const out: string[] = [];
+  let cur = '';
 
   for (const word of words) {
-    if (result.length >= maxLines) break;
-    if (current.length === 0) {
-      current = word;
-    } else if (current.length + 1 + word.length <= CHARS_PER_LINE) {
-      current += ` ${word}`;
+    if (out.length >= maxLines) break;
+    if (!cur) {
+      cur = word;
+    } else if (cur.length + 1 + word.length <= CHARS_PER_LINE) {
+      cur += ` ${word}`;
     } else {
-      result.push(current);
-      current = word;
+      out.push(cur);
+      cur = word;
     }
   }
-  if (current && result.length < maxLines) result.push(current);
-  return result;
+  if (cur && out.length < maxLines) out.push(cur);
+  return out;
 }
 
+// ---------------------------------------------------------------------------
+// Speaker label helpers
+// ---------------------------------------------------------------------------
+
+function speakerLabel(speaker: number): string {
+  return speaker === 0 ? 'אני' : `ד${speaker + 1}`;
+}
+
+function speakerStyle(speaker: number): LineStyle {
+  return speaker === 0 ? 'normal' : 'meta';
+}
+
+// ---------------------------------------------------------------------------
+// Transcript → DisplayLines
+// ---------------------------------------------------------------------------
+
+/**
+ * Converts confirmed + interim segments into display lines, capped at maxLines.
+ * Oldest lines scroll off the top; newest always visible at the bottom.
+ */
+function segmentsToLines(
+  confirmed: DiarizedSegment[],
+  interim: DiarizedSegment[],
+  maxLines: number,
+) {
+  // Build all lines (oldest → newest)
+  const allLines: ReturnType<typeof line>[] = [];
+
+  const addSegment = (seg: DiarizedSegment, isInterim: boolean) => {
+    const prefix = `${speakerLabel(seg.speaker)}: `;
+    const style  = speakerStyle(seg.speaker);
+    const wrapped = wrapText(prefix + seg.text, 3); // max 3 lines per segment
+    wrapped.forEach((t, i) => {
+      // Highlight the last line of the current interim segment (active speech)
+      const invert = isInterim && i === wrapped.length - 1;
+      allLines.push(line(t, style, invert));
+    });
+  };
+
+  for (const seg of confirmed) addSegment(seg, false);
+  for (const seg of interim)   addSegment(seg, true);
+
+  // Slide window: show only the last maxLines
+  return allLines.slice(-maxLines);
+}
+
+// ---------------------------------------------------------------------------
+// Main display function
+// ---------------------------------------------------------------------------
+
 export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayData {
-  // ── Loading ────────────────────────────────────────────────────────────────
-  if (snap.state === 'loading') {
+
+  // ── Connecting ─────────────────────────────────────────────────────────────
+  if (snap.sttState === 'connecting') {
     return { lines: [line('מתחבר לשירות...')] };
   }
 
-  // ── Processing ─────────────────────────────────────────────────────────────
-  if (snap.state === 'processing') {
-    return { lines: [line('מעבד...')] };
-  }
-
   // ── Error ──────────────────────────────────────────────────────────────────
-  if (snap.state === 'error') {
-    const errLines = wrapText(snap.errorMsg ?? 'שגיאה לא ידועה', 6);
+  if (snap.sttState === 'error') {
+    const errLines = wrapText(snap.error ?? 'שגיאה לא ידועה', 6);
     return {
       lines: [
         ...errLines.map(t => line(t, 'meta')),
@@ -64,50 +116,55 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
           items: ['נסה שוב', 'נקה'],
           highlightedIndex: nav.highlightedIndex,
           maxVisible: 2,
-          formatter: (a) => a,
+          formatter: a => a,
         }),
       ],
     };
   }
 
-  // ── Listening — show live Deepgram interim transcript ──────────────────────
-  if (snap.isListening) {
-    const displayText = snap.interimTranscript || 'מקליט...';
-    const textLines = wrapText(displayText, 8);
+  // ── Listening — live diarized conversation ────────────────────────────────
+  if (snap.sttState === 'listening') {
+    const transcriptLines = segmentsToLines(snap.segments, snap.interim, TRANSCRIPT_LINES);
+
+    // Pad so "עצור" is always anchored at the bottom
+    const pad = Math.max(0, TRANSCRIPT_LINES - transcriptLines.length);
+
     return {
       lines: [
-        ...textLines.map(t => line(t)),
-        // Pad to push "עצור" to the bottom (max 10 lines total)
-        ...Array.from({ length: Math.max(0, 9 - textLines.length) }, () => line('')),
+        ...transcriptLines,
+        ...Array.from({ length: pad }, () => line('')),
+        line(''),
         line('▶ עצור', 'meta', true),
       ],
     };
   }
 
-  // ── Result ─────────────────────────────────────────────────────────────────
-  if (snap.transcript) {
-    const textLines = wrapText(snap.transcript, 7);
+  // ── Idle with conversation history ────────────────────────────────────────
+  if (snap.hasContent) {
+    const transcriptLines = segmentsToLines(snap.segments, [], TRANSCRIPT_LINES);
+    const pad = Math.max(0, TRANSCRIPT_LINES - transcriptLines.length);
     return {
       lines: [
-        ...textLines.map(t => line(t)),
+        ...transcriptLines,
+        ...Array.from({ length: pad }, () => line('')),
         line(''),
         ...buildScrollableList({
           items: ['הקלט שוב', 'נקה'],
           highlightedIndex: nav.highlightedIndex,
           maxVisible: 2,
-          formatter: (a) => a,
+          formatter: a => a,
         }),
       ],
     };
   }
 
-  // ── Idle ───────────────────────────────────────────────────────────────────
+  // ── Idle — no history ─────────────────────────────────────────────────────
   return {
     lines: [
       line(''),
-      line('מוכן להקלטה'),
+      line('זיהוי דיבור עברית'),
       line(''),
-      line('▶ הקלט', 'meta', true),
+      line('▶ התחל', 'meta', true),
     ],
   };
 }
