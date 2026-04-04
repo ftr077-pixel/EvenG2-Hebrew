@@ -1,14 +1,19 @@
 {
   "package_id": "com.eveng2.hebrew",
   "name": "עברית",
-  "tagline": "Hebrew speech transcription",
-  "description": "זיהוי דיבור בעברית - מקליט קול מהמשקפיים ומציג את הטקסט בתצוגה",
   "version": "1.0.0",
   "edition": "202601",
-  "minAppVersion": "0.1.0",
+  "entrypoint": "index.html",
   "author": "EvenG2-Hebrew",
-  "entry": "index.html",
-  "icon": "assets/icon.png",
-  "permissions": ["microphone"],
-  "category": "productivity"
+  "tagline": "Hebrew speech transcription",
+  "description": "זיהוי דיבור בעברית - מקליט קול מהמשקפיים ומציג את הטקסט בתצוגה",
+  "min_app_version": "0.1.0",
+  "min_sdk_version": "0.0.9",
+  "supported_languages": ["he"],
+  "permissions": [
+    {
+      "name": "microphone",
+      "desc": "Required for speech recognition"
+    }
+  ]
 }

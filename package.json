@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pack": "npm run build && evenhub pack app.json dist -o eveng2-hebrew.ehpk"
   },
   "dependencies": {
     "even-toolkit": "^1.6.3",
