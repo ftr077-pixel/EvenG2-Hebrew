@@ -28,7 +28,9 @@ function push(level: LogEntry['level'], message: string) {
   // Create new snapshot reference so React knows it changed
   snapshot = [...entries];
   console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](`[DBG ${entry.time}] ${message}`);
-  for (const cb of listeners) cb();
+  for (const cb of [...listeners]) {
+    try { cb(); } catch { /* prevent subscriber errors from breaking logging */ }
+  }
 }
 
 export const dbg = {

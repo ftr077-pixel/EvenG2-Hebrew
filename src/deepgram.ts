@@ -91,12 +91,15 @@ function wordsToSegments(words: DGWord[]): DiarizedSegment[] {
 }
 
 /** Convert Float32 PCM (-1..1) → Int16 for Deepgram linear16 encoding. */
+let reusableI16: Int16Array | null = null;
 function f32ToI16(f32: Float32Array): Int16Array {
-  const i16 = new Int16Array(f32.length);
-  for (let i = 0; i < f32.length; i++) {
-    i16[i] = Math.round(Math.max(-1, Math.min(1, f32[i])) * 32767);
+  if (!reusableI16 || reusableI16.length < f32.length) {
+    reusableI16 = new Int16Array(f32.length);
   }
-  return i16;
+  for (let i = 0; i < f32.length; i++) {
+    reusableI16[i] = Math.round(Math.max(-1, Math.min(1, f32[i])) * 32767);
+  }
+  return reusableI16;
 }
 
 const DG_PARAMS = new URLSearchParams({
@@ -175,7 +178,7 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
     setError(null);
     setSttState('connecting');
     dbg.info('=== STT START ===');
-    dbg.info(`API key: ${apiKey ? apiKey.slice(0, 8) + '...' : 'MISSING'}`);
+    dbg.info(`API key: ${apiKey ? 'present' : 'MISSING'}`);
     dbg.info(`UA: ${navigator.userAgent.slice(0, 80)}`);
     dbg.info(`Bridge: ${!!((window as unknown) as Record<string, unknown>).__evenBridge}`);
 
@@ -186,32 +189,8 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
       return;
     }
 
-    // Step 1: HTTP fetch test
-    dbg.info('Step 1: fetch api.deepgram.com...');
-    try {
-      const t0 = Date.now();
-      const resp = await fetch('https://api.deepgram.com/v1/projects', {
-        method: 'GET',
-        headers: { 'Authorization': `Token ${apiKey}` },
-        signal: AbortSignal.timeout(8000),
-      });
-      dbg.info(`fetch OK: ${resp.status} (${Date.now() - t0}ms)`);
-    } catch (e: unknown) {
-      dbg.error(`fetch FAIL: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // Step 2: fetch httpbin (any internet?)
-    dbg.info('Step 2: fetch httpbin.org...');
-    try {
-      const t0 = Date.now();
-      const resp = await fetch('https://httpbin.org/get', { signal: AbortSignal.timeout(8000) });
-      dbg.info(`httpbin OK: ${resp.status} (${Date.now() - t0}ms)`);
-    } catch (e: unknown) {
-      dbg.error(`httpbin FAIL: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // Step 3: WebSocket to Deepgram
-    dbg.info('Step 3: WebSocket to Deepgram...');
+    // WebSocket to Deepgram
+    dbg.info('Connecting WebSocket to Deepgram...');
     let ws: WebSocket;
     const wsUrl = `wss://api.deepgram.com/v1/listen?${DG_PARAMS}`;
     try {
@@ -259,10 +238,20 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
       if (activeRef.current) { activeRef.current = false; closeSource(); wsRef.current = null; setInterim([]); setSttState('idle'); }
     };
 
-    ws.onerror = () => { dbg.error('WS error during session'); };
+    ws.onerror = () => {
+      dbg.error('WS error during session');
+      if (activeRef.current) {
+        activeRef.current = false;
+        closeSource();
+        wsRef.current = null;
+        setInterim([]);
+        setError('WebSocket connection lost');
+        setSttState('error');
+      }
+    };
 
-    // Step 4: Start mic
-    dbg.info('Step 4: GlassBridgeSource...');
+    // Start mic
+    dbg.info('Starting GlassBridgeSource...');
     const source = new GlassBridgeSource();
     try {
       await source.start();
@@ -281,10 +270,11 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
     let chunks = 0;
     unsubRef.current = source.onAudioData((pcm: Float32Array) => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(f32ToI16(pcm).buffer);
+        const i16 = f32ToI16(pcm);
+        ws.send(new Uint8Array(i16.buffer, 0, pcm.length * 2));
         chunks++;
         if (chunks === 1) dbg.info('First audio chunk sent');
-        if (chunks % 100 === 0) dbg.info(`Audio chunks: ${chunks}`);
+        if (chunks % 1000 === 0) dbg.info(`Audio chunks: ${chunks}`);
       }
     });
 

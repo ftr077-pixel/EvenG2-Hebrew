@@ -49,8 +49,8 @@ function preloadFont(): Promise<void> {
       fontLoaded = true;
       dbg.info('Hebrew font loaded');
     } catch (err) {
-      dbg.error(`Font load failed: ${err instanceof Error ? err.message : String(err)}`);
-      fontLoaded = true;
+      dbg.warn(`Font load failed, using fallback: ${err instanceof Error ? err.message : String(err)}`);
+      fontLoaded = true; // Continue with system fallback font
     }
   })();
 
@@ -69,17 +69,33 @@ function ensureCanvas(): CanvasRenderingContext2D {
     canvas.height = CANVAS_H;
   }
   if (!ctx) {
-    ctx = canvas.getContext('2d')!;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas 2D context unavailable');
+    ctx = context;
   }
   return ctx;
 }
 
+// Reusable tile canvases — created once per tile width to avoid per-frame allocation
+const tileCanvasCache = new Map<number, { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>();
+
+function getTileCanvas(tw: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  let cached = tileCanvasCache.get(tw);
+  if (!cached) {
+    const c = document.createElement('canvas');
+    c.width = tw;
+    c.height = CANVAS_H;
+    const context = c.getContext('2d');
+    if (!context) throw new Error('Tile canvas 2D context unavailable');
+    cached = { canvas: c, ctx: context };
+    tileCanvasCache.set(tw, cached);
+  }
+  return cached;
+}
+
 /** Encode a region of the canvas to a 4-bit indexed greyscale PNG. */
 function encodeTile(sx: number, tw: number): Uint8Array {
-  const tileCanvas = document.createElement('canvas');
-  tileCanvas.width = tw;
-  tileCanvas.height = CANVAS_H;
-  const tc = tileCanvas.getContext('2d')!;
+  const { ctx: tc } = getTileCanvas(tw);
 
   tc.fillStyle = '#000000';
   tc.fillRect(0, 0, tw, CANVAS_H);

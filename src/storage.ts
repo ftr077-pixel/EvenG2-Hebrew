@@ -31,8 +31,12 @@ export interface Session {
 export function loadSessions(): Session[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Session[]) : [];
-  } catch {
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as Session[];
+  } catch (err) {
+    console.error('Failed to load sessions:', err);
     return [];
   }
 }
@@ -42,6 +46,7 @@ function saveSessions(sessions: Session[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
   } catch {
     // Quota exceeded — drop oldest sessions and retry
+    console.warn('localStorage quota exceeded — trimming oldest sessions');
     const trimmed = sessions.slice(-Math.floor(MAX_SESSIONS / 2));
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed)); } catch { /* ignore */ }
   }

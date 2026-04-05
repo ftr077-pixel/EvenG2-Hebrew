@@ -99,7 +99,8 @@ export function useGlassesHebrew<S>(config: UseGlassesHebrewConfig<S>): void {
       sendingRef.current = false;
       if (pendingRef.current) {
         pendingRef.current = false;
-        sendDisplay();
+        // Use queueMicrotask to avoid recursive stack growth
+        queueMicrotask(() => { void sendDisplay(); });
       }
     }
   }, []);

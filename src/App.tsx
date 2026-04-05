@@ -42,7 +42,7 @@ const DEEPGRAM_API_KEY   = import.meta.env.VITE_DEEPGRAM_API_KEY   ?? '';
 const ANTHROPIC_API_KEY  = import.meta.env.VITE_ANTHROPIC_API_KEY  ?? '';
 
 dbg.info('App loaded');
-dbg.info(`DG key: ${DEEPGRAM_API_KEY ? DEEPGRAM_API_KEY.slice(0, 8) + '...' : 'MISSING'}`);
+dbg.info(`DG key: ${DEEPGRAM_API_KEY ? 'present' : 'MISSING'}`);
 dbg.info(`URL: ${window.location.href.slice(0, 60)}`);
 
 export default function App() {
@@ -115,8 +115,8 @@ export default function App() {
       // Update stored session with summary
       saveSession({ ...partial, summary: result });
       refreshSessions();
-    } catch {
-      // Non-fatal — transcript is saved without summary
+    } catch (err) {
+      dbg.warn(`Summarization failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSummarizing(false);
     }

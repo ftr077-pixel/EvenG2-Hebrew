@@ -98,29 +98,43 @@ export async function summarizeTranscript(
   let fullText = '';
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // Timeout guard: abort if stream stalls for 60s
+  const streamTimeout = 60_000;
+  let lastActivity = Date.now();
+  const timeoutCheck = setInterval(() => {
+    if (Date.now() - lastActivity > streamTimeout) {
+      reader.cancel().catch(() => {});
+    }
+  }, 5_000);
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const raw = line.slice(6).trim();
-      if (raw === '[DONE]') continue;
-      let event: Record<string, unknown>;
-      try { event = JSON.parse(raw); } catch { continue; }
+      lastActivity = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
 
-      if (event.type === 'content_block_delta') {
-        const delta = event.delta as Record<string, unknown> | undefined;
-        if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-          fullText += delta.text;
-          onChunk?.(delta.text);
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') continue;
+        let event: Record<string, unknown>;
+        try { event = JSON.parse(raw); } catch { continue; }
+
+        if (event.type === 'content_block_delta') {
+          const delta = event.delta as Record<string, unknown> | undefined;
+          if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+            fullText += delta.text;
+            onChunk?.(delta.text);
+          }
         }
       }
     }
+  } finally {
+    clearInterval(timeoutCheck);
   }
 
   return fullText.trim() || 'אין מספיק תוכן לסיכום.';
