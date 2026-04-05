@@ -39,7 +39,7 @@ import { Dashboard } from './Dashboard';
 import { dbg } from './debugLog';
 
 const DEEPGRAM_API_KEY   = import.meta.env.VITE_DEEPGRAM_API_KEY   ?? '';
-const ANTHROPIC_API_KEY  = import.meta.env.VITE_ANTHROPIC_API_KEY  ?? '';
+const GEMINI_API_KEY     = import.meta.env.VITE_GEMINI_API_KEY     ?? '';
 
 dbg.info('App loaded');
 dbg.info(`DG key: ${DEEPGRAM_API_KEY ? 'present' : 'MISSING'}`);
@@ -103,13 +103,13 @@ export default function App() {
     saveSession(partial);
     refreshSessions();
 
-    if (!ANTHROPIC_API_KEY) return; // skip summarization if no key
+    if (!GEMINI_API_KEY) return; // skip summarization if no key
 
     setSummarizing(true);
     setSummary(null);
 
     try {
-      const result = await summarizeTranscript(segments, ANTHROPIC_API_KEY);
+      const result = await summarizeTranscript(segments, GEMINI_API_KEY);
       setSummary(result);
 
       // Update stored session with summary
