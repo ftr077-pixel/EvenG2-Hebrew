@@ -104,7 +104,8 @@ function f32ToI16(f32: Float32Array): Int16Array {
 
 const DG_PARAMS = new URLSearchParams({
   model: 'nova-3',
-  language: 'multi',          // Auto-detect language per utterance
+  language: 'he',             // Primary language: Hebrew
+  detect_language: 'true',    // Also detect other languages automatically
   diarize: 'true',          // Speaker separation (acoustic only)
   encoding: 'linear16',
   sample_rate: '16000',
