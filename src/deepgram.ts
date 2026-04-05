@@ -19,6 +19,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { GlassBridgeSource } from 'even-toolkit/stt';
+import { dbg } from './debugLog';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -173,72 +174,103 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
 
     setError(null);
     setSttState('connecting');
+    dbg.info('=== STT START ===');
+    dbg.info(`API key: ${apiKey ? apiKey.slice(0, 8) + '...' : 'MISSING'}`);
+    dbg.info(`UA: ${navigator.userAgent.slice(0, 80)}`);
+    dbg.info(`Bridge: ${!!((window as unknown) as Record<string, unknown>).__evenBridge}`);
 
     if (!apiKey) {
-      setError('מפתח Deepgram חסר — הגדר VITE_DEEPGRAM_API_KEY בקובץ .env');
+      dbg.error('No API key');
+      setError('Missing Deepgram key');
       setSttState('error');
       return;
     }
 
-    // 1. Open Deepgram WebSocket
-    let ws: WebSocket;
+    // Step 1: HTTP fetch test
+    dbg.info('Step 1: fetch api.deepgram.com...');
     try {
+      const t0 = Date.now();
+      const resp = await fetch('https://api.deepgram.com/v1/projects', {
+        method: 'GET',
+        headers: { 'Authorization': `Token ${apiKey}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      dbg.info(`fetch OK: ${resp.status} (${Date.now() - t0}ms)`);
+    } catch (e: unknown) {
+      dbg.error(`fetch FAIL: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // Step 2: fetch httpbin (any internet?)
+    dbg.info('Step 2: fetch httpbin.org...');
+    try {
+      const t0 = Date.now();
+      const resp = await fetch('https://httpbin.org/get', { signal: AbortSignal.timeout(8000) });
+      dbg.info(`httpbin OK: ${resp.status} (${Date.now() - t0}ms)`);
+    } catch (e: unknown) {
+      dbg.error(`httpbin FAIL: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // Step 3: WebSocket to Deepgram
+    dbg.info('Step 3: WebSocket to Deepgram...');
+    let ws: WebSocket;
+    const wsUrl = `wss://api.deepgram.com/v1/listen?${DG_PARAMS}`;
+    try {
+      const t0 = Date.now();
       ws = await new Promise<WebSocket>((resolve, reject) => {
-        const sock = new WebSocket(
-          `wss://api.deepgram.com/v1/listen?${DG_PARAMS}`,
-          ['token', apiKey],
-        );
-        sock.onopen  = () => resolve(sock);
-        sock.onerror = () => reject(new Error('חיבור ל-Deepgram נכשל — בדוק מפתח API וחיבור רשת'));
+        let settled = false;
+        const sock = new WebSocket(wsUrl, ['token', apiKey]);
+        const timer = setTimeout(() => {
+          if (!settled) { settled = true; dbg.error(`WS TIMEOUT 10s (state=${sock.readyState})`); sock.close(); reject(new Error('WS timeout')); }
+        }, 10000);
+        sock.onopen = () => {
+          if (!settled) { settled = true; clearTimeout(timer); dbg.info(`WS OPEN (${Date.now() - t0}ms)`); resolve(sock); }
+        };
+        sock.onerror = () => {
+          if (!settled) { settled = true; clearTimeout(timer); dbg.error(`WS ERROR (${Date.now() - t0}ms)`); reject(new Error('WS error')); }
+        };
+        sock.onclose = (ev) => {
+          if (!settled) { settled = true; clearTimeout(timer); dbg.error(`WS CLOSED code=${ev.code} (${Date.now() - t0}ms)`); reject(new Error(`WS closed ${ev.code}`)); }
+        };
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'חיבור נכשל');
+      const msg = err instanceof Error ? err.message : 'unknown';
+      dbg.error(`WS failed: ${msg}`);
+      setError(`Deepgram: ${msg}`);
       setSttState('error');
       return;
     }
 
     wsRef.current = ws;
+    dbg.info('WS connected OK');
 
-    // Deepgram message handler
     ws.onmessage = (ev: MessageEvent<string>) => {
       let data: DGResult;
       try { data = JSON.parse(ev.data); } catch { return; }
-
       if (data.type !== 'Results') return;
-
       const words = data.channel?.alternatives?.[0]?.words ?? [];
       if (words.length === 0) return;
-
       const segs = wordsToSegments(words);
-
-      if (data.is_final) {
-        setSegments(prev => [...prev, ...segs]);
-        setInterim([]);
-      } else {
-        setInterim(segs);
-      }
+      if (data.is_final) { setSegments(prev => [...prev, ...segs]); setInterim([]); }
+      else { setInterim(segs); }
     };
 
-    ws.onclose = () => {
-      // If server closes unexpectedly while we're still active
-      if (activeRef.current) {
-        activeRef.current = false;
-        closeSource();
-        wsRef.current = null;
-        setInterim([]);
-        setSttState('idle');
-      }
+    ws.onclose = (ev) => {
+      dbg.warn(`WS closed: code=${ev.code} reason=${ev.reason}`);
+      if (activeRef.current) { activeRef.current = false; closeSource(); wsRef.current = null; setInterim([]); setSttState('idle'); }
     };
 
-    // 2. Start G2 microphone (GlassBridgeSource reads window.__evenBridge
-    //    which useGlasses sets during bridge init)
+    ws.onerror = () => { dbg.error('WS error during session'); };
+
+    // Step 4: Start mic
+    dbg.info('Step 4: GlassBridgeSource...');
     const source = new GlassBridgeSource();
     try {
       await source.start();
-    } catch {
-      closeWs(ws);
-      wsRef.current = null;
-      setError('מיקרופון G2 לא זמין — ודא שהמשקפיים מחוברות');
+      dbg.info('Mic started OK');
+    } catch (e: unknown) {
+      dbg.error(`Mic FAIL: ${e instanceof Error ? e.message : String(e)}`);
+      closeWs(ws); wsRef.current = null;
+      setError(`Mic: ${e instanceof Error ? e.message : 'failed'}`);
       setSttState('error');
       return;
     }
@@ -246,13 +278,17 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
     sourceRef.current = source;
     activeRef.current = true;
 
-    // 3. Pipe Float32 → Int16 → Deepgram WebSocket
+    let chunks = 0;
     unsubRef.current = source.onAudioData((pcm: Float32Array) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(f32ToI16(pcm).buffer);
+        chunks++;
+        if (chunks === 1) dbg.info('First audio chunk sent');
+        if (chunks % 100 === 0) dbg.info(`Audio chunks: ${chunks}`);
       }
     });
 
+    dbg.info('LISTENING');
     setSttState('listening');
   }, [apiKey, closeSource, closeWs]);
 

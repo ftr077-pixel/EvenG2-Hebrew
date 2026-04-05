@@ -26,9 +26,9 @@
  */
 
 import { useMemo, useRef, useCallback, useState, useEffect } from 'react';
-import { useGlasses } from 'even-toolkit/useGlasses';
 import { moveHighlight } from 'even-toolkit/glass-nav';
 import type { GlassNavState, GlassAction } from 'even-toolkit';
+import { useGlassesHebrew } from './useGlassesHebrew';
 import { useDiarizedSTT } from './deepgram';
 import { toDisplayData } from './display';
 import type { AppSnapshot } from './types';
@@ -36,9 +36,14 @@ import { summarizeTranscript } from './summarize';
 import { loadSessions, saveSession, deleteSession, clearAllSessions, newSessionId } from './storage';
 import type { Session } from './storage';
 import { Dashboard } from './Dashboard';
+import { dbg } from './debugLog';
 
 const DEEPGRAM_API_KEY   = import.meta.env.VITE_DEEPGRAM_API_KEY   ?? '';
 const ANTHROPIC_API_KEY  = import.meta.env.VITE_ANTHROPIC_API_KEY  ?? '';
+
+dbg.info('App loaded');
+dbg.info(`DG key: ${DEEPGRAM_API_KEY ? DEEPGRAM_API_KEY.slice(0, 8) + '...' : 'MISSING'}`);
+dbg.info(`URL: ${window.location.href.slice(0, 60)}`);
 
 export default function App() {
   // ── Diarized speech-to-text ────────────────────────────────────────────────
@@ -194,8 +199,8 @@ export default function App() {
     return nav;
   }, []);
 
-  // ── Glasses bridge ────────────────────────────────────────────────────────
-  useGlasses<AppSnapshot>({
+  // ── Glasses bridge (image-based for Hebrew support) ────────────────────────
+  useGlassesHebrew<AppSnapshot>({
     appName: 'עברית',
     getSnapshot: () => snapRef.current,
     deriveScreen: () => 'main',

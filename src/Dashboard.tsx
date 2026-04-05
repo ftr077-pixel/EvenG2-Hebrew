@@ -10,9 +10,11 @@
  * RTL Hebrew layout.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useSyncExternalStore } from 'react';
 import type { DiarizedSegment } from './deepgram';
 import type { Session } from './storage';
+import { dbg } from './debugLog';
+import type { LogEntry } from './debugLog';
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -171,6 +173,22 @@ export interface DashboardProps {
   onClearAll: () => void;
 }
 
+function DebugLogPanel() {
+  const logs = useSyncExternalStore(dbg.subscribe, dbg.getEntries);
+  const color: Record<LogEntry['level'], string> = { info: '#10b981', warn: '#fbbf24', error: '#ef4444' };
+  return (
+    <div style={{ fontFamily: 'monospace', fontSize: 11, lineHeight: 1.5 }}>
+      {logs.length === 0 ? (
+        <div style={{ color: '#9ca3af' }}>No logs yet — tap glasses to start</div>
+      ) : logs.map((e, i) => (
+        <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid #1f2937', color: color[e.level], wordBreak: 'break-all', direction: 'ltr', textAlign: 'left' }}>
+          <span style={{ color: '#6b7280' }}>{e.time}</span> {e.level === 'error' ? 'ERR ' : ''}{e.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Dashboard({
   liveSegments,
   liveInterim,
@@ -215,6 +233,12 @@ export function Dashboard({
       background: '#fff',
       minHeight: '100dvh',
     }}>
+      {/* DEBUG LOG */}
+      <div style={{ background: '#111827', color: '#10b981', borderRadius: 8, padding: '10px 12px', marginBottom: 14, maxHeight: 300, overflow: 'auto' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24', marginBottom: 6, direction: 'ltr', textAlign: 'left' }}>DEBUG LOG</div>
+        <DebugLogPanel />
+      </div>
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 10 }}>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, flex: 1 }}>
