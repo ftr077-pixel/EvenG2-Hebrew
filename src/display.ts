@@ -126,7 +126,7 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
           line('מקשיב...', 'meta'),
           line(''),
           line(''),
-          line('▶ עצור', 'meta', true),
+          line('עצור', 'meta', true),
         ],
       };
     }
@@ -137,7 +137,7 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
       lines: [
         ...transcriptLines,
         ...Array.from({ length: pad }, () => line('')),
-        line('▶ עצור', 'meta', true),
+        line('עצור', 'meta', true),
       ],
     };
   }
@@ -183,7 +183,7 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
       line('זיהוי דיבור עברית'),
       line(''),
       line(''),
-      line('▶ התחל', 'meta', true),
+      line('התחל', 'meta', true),
     ],
   };
 }

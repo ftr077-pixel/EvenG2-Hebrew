@@ -43,6 +43,8 @@ const GEMINI_API_KEY     = import.meta.env.VITE_GEMINI_API_KEY     ?? '';
 
 dbg.info('App loaded');
 dbg.info(`DG key: ${DEEPGRAM_API_KEY ? 'present' : 'MISSING'}`);
+dbg.info(`Gemini key: ${GEMINI_API_KEY ? 'present' : 'MISSING'}`);
+dbg.info(`Stored sessions: ${loadSessions().length}`);
 dbg.info(`URL: ${window.location.href.slice(0, 60)}`);
 
 export default function App() {

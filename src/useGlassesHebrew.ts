@@ -24,18 +24,9 @@ export interface UseGlassesHebrewConfig<S> {
   appName: string;
 }
 
-/** Build a simple ASCII action bar from DisplayData (for the text area below tiles) */
-function extractActionText(data: DisplayData): string {
-  // Take only non-image lines (action buttons at the bottom)
-  const lines = data.lines;
-  const actionLines: string[] = [];
-  for (const ln of lines) {
-    if (ln.inverted || ln.style === 'separator') {
-      const t = ln.inverted ? `> ${ln.text}` : '---';
-      actionLines.push(t);
-    }
-  }
-  return actionLines.length > 0 ? '\n' + actionLines.join('\n') : '';
+/** Text area below tiles is unused — all content rendered in image tiles */
+function extractActionText(_data: DisplayData): string {
+  return '';
 }
 
 export function useGlassesHebrew<S>(config: UseGlassesHebrewConfig<S>): void {
