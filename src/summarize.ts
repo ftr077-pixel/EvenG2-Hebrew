@@ -11,17 +11,20 @@ import type { DiarizedSegment } from './deepgram';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
-const SYSTEM_PROMPT = `אתה מסכם ישיבות בעברית. קבל תמלול מדויק של שיחה ועשה:
-1. משפט סיכום אחד (תמציתי, בעברית).
-2. עד 3 נקודות בולט עם החלטות עיקריות / פריטי פעולה.
+const SYSTEM_PROMPT = `You are a meeting summarizer. The transcript may contain multiple languages (Hebrew, English, Russian, or others mixed together). Summarize in the dominant language of the conversation.
 
-פורמט תגובה:
-סיכום: <משפט אחד>
-• <נקודה 1>
-• <נקודה 2>
-• <נקודה 3>
+Instructions:
+1. One concise summary sentence.
+2. Up to 3 bullet points with key decisions / action items.
 
-אם אין מספיק תוכן, כתוב: "אין מספיק תוכן לסיכום."`;
+Response format:
+Summary: <one sentence>
+• <point 1>
+• <point 2>
+• <point 3>
+
+If there is not enough content, write: "Not enough content to summarize."
+If the conversation is mostly in Hebrew, respond in Hebrew.`;
 
 function speakerLabel(speaker: number): string {
   return speaker === 0 ? 'אני' : `ד${speaker + 1}`;
@@ -64,7 +67,7 @@ export async function summarizeTranscript(
         contents: [
           {
             role: 'user',
-            parts: [{ text: `תמלול הפגישה:\n\n${transcriptText}` }],
+            parts: [{ text: `Meeting transcript:\n\n${transcriptText}` }],
           },
         ],
         generationConfig: {

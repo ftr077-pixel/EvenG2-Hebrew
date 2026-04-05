@@ -59,7 +59,7 @@ function SegmentRow({ seg, isInterim }: SegmentRowProps) {
       fontStyle: isInterim ? 'italic' : 'normal',
     }}>
       <SpeakerBadge speaker={seg.speaker} />
-      <span style={{ flex: 1, fontSize: 15, lineHeight: 1.5 }}>{seg.text}</span>
+      <span style={{ flex: 1, fontSize: 15, lineHeight: 1.5, direction: 'auto' as React.CSSProperties['direction'] }}>{seg.text}</span>
     </div>
   );
 }
