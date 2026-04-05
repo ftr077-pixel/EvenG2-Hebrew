@@ -5,7 +5,7 @@
  *
  *   Audio capture  → GlassBridgeSource (G2's 4-mic array via Even Hub bridge)
  *   Transport      → Float32→Int16 PCM streamed to Deepgram WebSocket
- *   ASR            → Deepgram nova-2, language=he, diarize=true
+ *   ASR            → Deepgram nova-3, language=he, diarize=true
  *   Diarization    → per-word speaker IDs grouped into DiarizedSegments
  *   VAD            → utterance_end_ms=1500 (Deepgram server-side)
  *
@@ -99,7 +99,7 @@ function f32ToI16(f32: Float32Array): Int16Array {
 }
 
 const DG_PARAMS = new URLSearchParams({
-  model: 'nova-2',
+  model: 'nova-3',
   language: 'he',          // Primary language: Hebrew
   diarize: 'true',          // Speaker separation (acoustic only)
   encoding: 'linear16',
