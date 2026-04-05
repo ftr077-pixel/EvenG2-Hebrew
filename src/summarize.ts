@@ -9,7 +9,7 @@
 import type { DiarizedSegment } from './deepgram';
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 
 const SYSTEM_PROMPT = `אתה מסכם ישיבות בעברית. קבל תמלול מדויק של שיחה ועשה:
 1. משפט סיכום אחד (תמציתי, בעברית).
