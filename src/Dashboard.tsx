@@ -151,6 +151,58 @@ function SessionCard({ session, onDelete }: SessionCardProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Summary card (summaries tab)
+// ---------------------------------------------------------------------------
+
+function SummaryCard({ session }: { session: Session }) {
+  const [copied, setCopied] = useState(false);
+
+  const date = new Date(session.startedAt).toLocaleString('he-IL', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+
+  const copySummary = useCallback(() => {
+    void navigator.clipboard.writeText(session.summary!);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [session.summary]);
+
+  return (
+    <div style={{
+      border: '1px solid #e5e7eb',
+      borderRadius: 10,
+      marginBottom: 10,
+      padding: '12px 14px',
+      background: '#eff6ff',
+    }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+      }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>{date}</div>
+        <div style={{ fontSize: 12, color: '#6b7280' }}>
+          {session.segments.length} קטעים
+        </div>
+      </div>
+      <div style={{
+        fontSize: 14,
+        lineHeight: 1.6,
+        whiteSpace: 'pre-wrap',
+        marginBottom: 10,
+      }}>
+        {session.summary}
+      </div>
+      <button onClick={copySummary} style={btnStyle('#2563eb')}>
+        {copied ? 'הועתק ✓' : 'העתק סיכום'}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Dashboard
 // ---------------------------------------------------------------------------
 
@@ -199,7 +251,7 @@ export function Dashboard({
   onDeleteSession,
   onClearAll,
 }: DashboardProps) {
-  const [tab, setTab] = useState<'live' | 'history'>('live');
+  const [tab, setTab] = useState<'live' | 'history' | 'summaries'>('live');
 
   const copyLive = useCallback(() => {
     const lines = liveSegments
@@ -258,7 +310,7 @@ export function Dashboard({
 
       {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: 16 }}>
-        {(['live', 'history'] as const).map(t => (
+        {(['live', 'history', 'summaries'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -275,7 +327,11 @@ export function Dashboard({
               marginBottom: -2,
             }}
           >
-            {t === 'live' ? 'שיחה נוכחית' : `היסטוריה (${sessions.length})`}
+            {t === 'live'
+              ? 'שיחה נוכחית'
+              : t === 'history'
+                ? `היסטוריה (${sessions.length})`
+                : `סיכומים (${sessions.filter(s => s.summary).length})`}
           </button>
         ))}
       </div>
@@ -321,6 +377,21 @@ export function Dashboard({
             <div style={{ marginTop: 16 }}>
               <button onClick={copyLive} style={btnStyle('#2563eb')}>העתק תמלול</button>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Summaries tab */}
+      {tab === 'summaries' && (
+        <div>
+          {sessions.filter(s => s.summary).length === 0 ? (
+            <div style={{ color: '#9ca3af', textAlign: 'center', paddingTop: 40, fontSize: 15 }}>
+              אין סיכומים עדיין
+            </div>
+          ) : (
+            [...sessions].filter(s => s.summary).reverse().map(s => (
+              <SummaryCard key={s.id} session={s} />
+            ))
           )}
         </div>
       )}
