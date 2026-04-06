@@ -48,8 +48,11 @@ dbg.info(`Stored sessions: ${loadSessions().length}`);
 dbg.info(`URL: ${window.location.href.slice(0, 60)}`);
 
 export default function App() {
+  // ── Language toggle (Hebrew / Multi) ──────────────────────────────────────
+  const [language, setLanguage] = useState<'he' | 'multi'>('he');
+
   // ── Diarized speech-to-text ────────────────────────────────────────────────
-  const stt = useDiarizedSTT(DEEPGRAM_API_KEY);
+  const stt = useDiarizedSTT(DEEPGRAM_API_KEY, language);
   const sttRef = useRef(stt);
   sttRef.current = stt;
 
@@ -231,6 +234,8 @@ export default function App() {
       sessions={sessions}
       onDeleteSession={handleDeleteSession}
       onClearAll={handleClearAll}
+      language={language}
+      onLanguageChange={setLanguage}
     />
   );
 }

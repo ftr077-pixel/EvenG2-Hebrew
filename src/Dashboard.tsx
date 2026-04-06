@@ -223,6 +223,10 @@ export interface DashboardProps {
   onDeleteSession: (id: string) => void;
   /** Called when user clears all history */
   onClearAll: () => void;
+  /** Current language setting */
+  language: 'he' | 'multi';
+  /** Called when user toggles language */
+  onLanguageChange: (lang: 'he' | 'multi') => void;
 }
 
 function DebugLogPanel() {
@@ -250,6 +254,8 @@ export function Dashboard({
   sessions,
   onDeleteSession,
   onClearAll,
+  language,
+  onLanguageChange,
 }: DashboardProps) {
   const [tab, setTab] = useState<'live' | 'history' | 'summaries'>('live');
 
@@ -296,6 +302,21 @@ export function Dashboard({
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, flex: 1 }}>
           עברית — G2
         </h1>
+        <button
+          onClick={() => onLanguageChange(language === 'he' ? 'multi' : 'he')}
+          style={{
+            padding: '3px 10px',
+            borderRadius: 20,
+            border: 'none',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            background: language === 'he' ? '#2563eb' : '#8b5cf6',
+            color: '#fff',
+          }}
+        >
+          {language === 'he' ? 'עברית' : 'הכל'}
+        </button>
         <span style={{
           fontSize: 12,
           fontWeight: 600,

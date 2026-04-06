@@ -17,7 +17,7 @@
  * accumulating segments across the entire conversation session.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { GlassBridgeSource } from 'even-toolkit/stt';
 import { dbg } from './debugLog';
 
@@ -102,24 +102,26 @@ function f32ToI16(f32: Float32Array): Int16Array {
   return reusableI16;
 }
 
-const DG_PARAMS = new URLSearchParams({
-  model: 'nova-3',
-  language: 'multi',          // Auto-detect language per utterance
-  diarize: 'true',          // Speaker separation (acoustic only)
-  encoding: 'linear16',
-  sample_rate: '16000',
-  channels: '1',
-  interim_results: 'true',  // Live partial transcripts
-  punctuate: 'true',
-  smart_format: 'true',
-  utterance_end_ms: '1500', // VAD: fire is_final after 1.5 s silence
-}).toString();
+function buildDgParams(language: string): string {
+  return new URLSearchParams({
+    model: 'nova-3',
+    language,
+    diarize: 'true',          // Speaker separation (acoustic only)
+    encoding: 'linear16',
+    sample_rate: '16000',
+    channels: '1',
+    interim_results: 'true',  // Live partial transcripts
+    punctuate: 'true',
+    smart_format: 'true',
+    utterance_end_ms: '1500', // VAD: fire is_final after 1.5 s silence
+  }).toString();
+}
 
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
-export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
+export function useDiarizedSTT(apiKey: string, language: string = 'he'): UseDiarizedSTTReturn {
   const [sttState, setSttState] = useState<STTState>('idle');
   const [segments, setSegments] = useState<DiarizedSegment[]>([]);
   const [interim, setInterim] = useState<DiarizedSegment[]>([]);
@@ -190,7 +192,8 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
     }
 
     // ── API key health check ──────────────────────────────────────────────
-    dbg.info(`DG params: ${DG_PARAMS}`);
+    const dgParams = buildDgParams(language);
+    dbg.info(`DG params: ${dgParams}`);
     try {
       const hc = await fetch('https://api.deepgram.com/v1/projects', {
         headers: { 'Authorization': `Token ${apiKey}` },
@@ -211,7 +214,7 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
     // ── WebSocket to Deepgram ───────────────────────────────────────────
     dbg.info('Connecting WebSocket to Deepgram...');
     let ws: WebSocket;
-    const wsUrl = `wss://api.deepgram.com/v1/listen?${DG_PARAMS}`;
+    const wsUrl = `wss://api.deepgram.com/v1/listen?${dgParams}`;
     try {
       const t0 = Date.now();
       ws = await new Promise<WebSocket>((resolve, reject) => {
@@ -301,7 +304,20 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
 
     dbg.info('LISTENING');
     setSttState('listening');
-  }, [apiKey, closeSource, closeWs]);
+  }, [apiKey, language, closeSource, closeWs]);
+
+  // Auto-restart when language changes while listening
+  const prevLangRef = useRef(language);
+  useEffect(() => {
+    if (prevLangRef.current !== language && activeRef.current) {
+      prevLangRef.current = language;
+      dbg.info(`Language changed to ${language}, restarting...`);
+      stop();
+      void start();
+    } else {
+      prevLangRef.current = language;
+    }
+  }, [language, stop, start]);
 
   return { sttState, segments, interim, error, start, stop, reset };
 }
