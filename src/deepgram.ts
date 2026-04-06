@@ -104,7 +104,7 @@ function f32ToI16(f32: Float32Array): Int16Array {
 
 const DG_PARAMS = new URLSearchParams({
   model: 'nova-3',
-  language: 'he',             // Hebrew (primary language)
+  language: 'multi',          // Auto-detect language per utterance
   diarize: 'true',          // Speaker separation (acoustic only)
   encoding: 'linear16',
   sample_rate: '16000',
@@ -189,7 +189,26 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
       return;
     }
 
-    // WebSocket to Deepgram
+    // ── API key health check ──────────────────────────────────────────────
+    dbg.info(`DG params: ${DG_PARAMS}`);
+    try {
+      const hc = await fetch('https://api.deepgram.com/v1/projects', {
+        headers: { 'Authorization': `Token ${apiKey}` },
+      });
+      dbg.info(`API key check: HTTP ${hc.status}`);
+      if (!hc.ok) {
+        const body = await hc.text().catch(() => '');
+        dbg.error(`API key rejected: ${hc.status} ${body.slice(0, 120)}`);
+        setError(`Deepgram key invalid (${hc.status})`);
+        setSttState('error');
+        return;
+      }
+    } catch (e) {
+      dbg.warn(`API key check failed (network?): ${e instanceof Error ? e.message : e}`);
+      // Continue anyway — maybe fetch is blocked but WS works
+    }
+
+    // ── WebSocket to Deepgram ───────────────────────────────────────────
     dbg.info('Connecting WebSocket to Deepgram...');
     let ws: WebSocket;
     const wsUrl = `wss://api.deepgram.com/v1/listen?${DG_PARAMS}`;
@@ -207,8 +226,10 @@ export function useDiarizedSTT(apiKey: string): UseDiarizedSTTReturn {
         sock.onerror = () => {
           if (!settled) { settled = true; clearTimeout(timer); dbg.error(`WS ERROR (${Date.now() - t0}ms)`); reject(new Error('WS error')); }
         };
+        // Always log close details, even if onerror already settled the promise
         sock.onclose = (ev) => {
-          if (!settled) { settled = true; clearTimeout(timer); dbg.error(`WS CLOSED code=${ev.code} (${Date.now() - t0}ms)`); reject(new Error(`WS closed ${ev.code}`)); }
+          dbg.error(`WS CLOSE code=${ev.code} reason="${ev.reason}" wasClean=${ev.wasClean} (${Date.now() - t0}ms)`);
+          if (!settled) { settled = true; clearTimeout(timer); reject(new Error(`WS closed ${ev.code}`)); }
         };
       });
     } catch (err) {
