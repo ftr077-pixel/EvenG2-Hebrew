@@ -30,6 +30,8 @@ export interface DiarizedSegment {
   speaker: number;
   text: string;
   timestamp: number;
+  /** Russian translation of `text`, populated in translate mode (he→ru). */
+  translation?: string;
 }
 
 type STTState = 'idle' | 'connecting' | 'listening' | 'error';

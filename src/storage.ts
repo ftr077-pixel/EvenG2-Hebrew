@@ -22,6 +22,8 @@ export interface Session {
   startedAt: string;
   segments: DiarizedSegment[];
   summary: string | null;
+  /** 'translate' sessions carry Russian translations on each segment */
+  mode?: 'transcribe' | 'translate';
 }
 
 // ---------------------------------------------------------------------------

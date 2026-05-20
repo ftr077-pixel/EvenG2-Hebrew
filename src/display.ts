@@ -9,7 +9,7 @@
 import type { DisplayData, GlassNavState, LineStyle } from 'even-toolkit';
 import { line } from 'even-toolkit';
 import { buildScrollableList } from 'even-toolkit/glass-display-builders';
-import type { AppSnapshot, DiarizedSegment } from './types';
+import type { AppSnapshot, AppMode, DiarizedSegment } from './types';
 
 
 const CHARS_PER_LINE = 38;
@@ -43,12 +43,24 @@ function wrapText(text: string, maxLines: number): string[] {
 // Speaker label helpers
 // ---------------------------------------------------------------------------
 
-function speakerLabel(speaker: number): string {
+function speakerLabel(speaker: number, mode: AppMode): string {
+  if (mode === 'translate') {
+    return speaker === 0 ? 'Я' : `Г${speaker + 1}`;
+  }
   return speaker === 0 ? 'אני' : `ד${speaker + 1}`;
 }
 
 function speakerStyle(speaker: number): LineStyle {
   return speaker === 0 ? 'normal' : 'meta';
+}
+
+/** Pick the text to display for a segment based on the current mode. */
+function segmentText(seg: DiarizedSegment, mode: AppMode): string {
+  if (mode === 'translate') {
+    // Russian translation only — no Hebrew letters in translate mode.
+    return seg.translation ?? '…';
+  }
+  return seg.text;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,13 +71,16 @@ function segmentsToLines(
   confirmed: DiarizedSegment[],
   interim: DiarizedSegment[],
   maxLines: number,
+  mode: AppMode,
 ) {
   const allLines: ReturnType<typeof line>[] = [];
 
   const addSegment = (seg: DiarizedSegment, isInterim: boolean) => {
-    const prefix = `${speakerLabel(seg.speaker)}: `;
+    const text = segmentText(seg, mode);
+    if (mode === 'translate' && isInterim && !seg.translation) return;
+    const prefix = `${speakerLabel(seg.speaker, mode)}: `;
     const style  = speakerStyle(seg.speaker);
-    const wrapped = wrapText(prefix + seg.text, 2);
+    const wrapped = wrapText(prefix + text, 2);
     wrapped.forEach((t, i) => {
       const invert = isInterim && i === wrapped.length - 1;
       allLines.push(line(t, style, invert));
@@ -82,31 +97,77 @@ function segmentsToLines(
 // Main display function
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Localized UI strings — keep the HUD in a single language per mode so the
+// user never sees mixed scripts (translate mode = no Hebrew letters at all).
+// ---------------------------------------------------------------------------
+
+interface UIStrings {
+  connecting: string;
+  summarizing: string[];
+  unknownError: string;
+  errRetry: string;
+  errClear: string;
+  listening: string;
+  stop: string;
+  again: string;
+  clear: string;
+  idleTitle: string;
+  start: string;
+}
+
+const STRINGS: Record<AppMode, UIStrings> = {
+  transcribe: {
+    connecting: 'מתחבר לשירות...',
+    summarizing: ['מסכם עם AI...', 'אנא המתן'],
+    unknownError: 'שגיאה לא ידועה',
+    errRetry: 'נסה שוב',
+    errClear: 'נקה',
+    listening: 'מקשיב...',
+    stop: '▶ עצור',
+    again: 'הקלט שוב',
+    clear: 'נקה',
+    idleTitle: 'זיהוי דיבור עברית',
+    start: '▶ התחל',
+  },
+  translate: {
+    connecting: 'Подключение...',
+    summarizing: ['', ''],
+    unknownError: 'Неизвестная ошибка',
+    errRetry: 'Повторить',
+    errClear: 'Очистить',
+    listening: 'Слушаю...',
+    stop: '▶ Стоп',
+    again: 'Записать снова',
+    clear: 'Очистить',
+    idleTitle: 'Перевод иврит → русский',
+    start: '▶ Старт',
+  },
+};
+
 export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayData {
+  const t = STRINGS[snap.mode];
 
   // ── Connecting ─────────────────────────────────────────────────────────────
   if (snap.sttState === 'connecting') {
-    return { lines: [line('מתחבר לשירות...')] };
+    return { lines: [line(t.connecting)] };
   }
 
   // ── Summarizing ────────────────────────────────────────────────────────────
   if (snap.sttState === 'summarizing') {
     return {
-      lines: [
-        line('מסכם עם AI...', 'meta'),
-        line('אנא המתן', 'meta'),
-      ],
+      lines: t.summarizing.map(s => line(s, 'meta')),
     };
   }
 
   // ── Error ──────────────────────────────────────────────────────────────────
   if (snap.sttState === 'error') {
-    const errLines = wrapText(snap.error ?? 'שגיאה לא ידועה', 3);
+    const errLines = wrapText(snap.error ?? t.unknownError, 3);
     return {
       lines: [
-        ...errLines.map(t => line(t, 'meta')),
+        ...errLines.map(s => line(s, 'meta')),
         ...buildScrollableList({
-          items: ['נסה שוב', 'נקה'],
+          items: [t.errRetry, t.errClear],
           highlightedIndex: nav.highlightedIndex,
           maxVisible: 2,
           formatter: a => a,
@@ -117,27 +178,25 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
 
   // ── Listening — live diarized conversation ────────────────────────────────
   if (snap.sttState === 'listening') {
-    const transcriptLines = segmentsToLines(snap.segments, snap.interim, TRANSCRIPT_LINES);
+    const transcriptLines = segmentsToLines(snap.segments, snap.interim, TRANSCRIPT_LINES, snap.mode);
 
     if (transcriptLines.length === 0) {
-      // No speech yet — show "listening" indicator
       return {
         lines: [
-          line('מקשיב...', 'meta'),
+          line(t.listening, 'meta'),
           line(''),
           line(''),
-          line('▶ עצור', 'meta', true),
+          line(t.stop, 'meta', true),
         ],
       };
     }
 
-    // Pad transcript to keep action at line 4
     const pad = Math.max(0, TRANSCRIPT_LINES - transcriptLines.length);
     return {
       lines: [
         ...transcriptLines,
         ...Array.from({ length: pad }, () => line('')),
-        line('▶ עצור', 'meta', true),
+        line(t.stop, 'meta', true),
       ],
     };
   }
@@ -149,10 +208,10 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
       const pad = Math.max(0, TRANSCRIPT_LINES - summaryLines.length);
       return {
         lines: [
-          ...summaryLines.map(t => line(t, 'normal')),
+          ...summaryLines.map(s => line(s, 'normal')),
           ...Array.from({ length: pad }, () => line('')),
           ...buildScrollableList({
-            items: ['הקלט שוב', 'נקה'],
+            items: [t.again, t.clear],
             highlightedIndex: nav.highlightedIndex,
             maxVisible: 2,
             formatter: a => a,
@@ -161,14 +220,14 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
       };
     }
 
-    const transcriptLines = segmentsToLines(snap.segments, [], TRANSCRIPT_LINES);
+    const transcriptLines = segmentsToLines(snap.segments, [], TRANSCRIPT_LINES, snap.mode);
     const pad = Math.max(0, TRANSCRIPT_LINES - transcriptLines.length);
     return {
       lines: [
         ...transcriptLines,
         ...Array.from({ length: pad }, () => line('')),
         ...buildScrollableList({
-          items: ['הקלט שוב', 'נקה'],
+          items: [t.again, t.clear],
           highlightedIndex: nav.highlightedIndex,
           maxVisible: 2,
           formatter: a => a,
@@ -180,10 +239,10 @@ export function toDisplayData(snap: AppSnapshot, nav: GlassNavState): DisplayDat
   // ── Idle — no history ─────────────────────────────────────────────────────
   return {
     lines: [
-      line('זיהוי דיבור עברית'),
+      line(t.idleTitle),
       line(''),
       line(''),
-      line('▶ התחל', 'meta', true),
+      line(t.start, 'meta', true),
     ],
   };
 }

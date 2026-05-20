@@ -12,6 +12,8 @@ export type { DiarizedSegment };
  *   summarizing — session stopped, AI summary in progress
  *   error       — connection or mic failure
  */
+export type AppMode = 'transcribe' | 'translate';
+
 export interface AppSnapshot {
   sttState: 'idle' | 'connecting' | 'listening' | 'summarizing' | 'error';
   /** All confirmed (is_final) diarized segments for the session */
@@ -25,4 +27,6 @@ export interface AppSnapshot {
   numActions: number;
   /** AI-generated summary for the current session */
   summary: string | null;
+  /** Active mode: Hebrew transcription or live Hebrew→Russian translation */
+  mode: AppMode;
 }
