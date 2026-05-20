@@ -1,19 +1,14 @@
 /**
- * Live Hebrew → Russian translation via Claude API.
+ * Live Hebrew → Russian translation via OpenRouter (google/gemini-2.5-flash).
  *
  * Each confirmed Deepgram segment is sent individually for low-latency live
- * translation. We use claude-haiku-4-5 (fast) and non-streaming (single
- * segments are short enough).
- *
- * Transport mirrors summarize.ts:
- *   • Dev (Vite)        → /api/anthropic proxy (see vite.config.ts)
- *   • Even Hub WebView  → direct https://api.anthropic.com
+ * translation. We use a fast multilingual model and non-streaming (single
+ * segments are short enough to wait for the full response).
  */
 
-const ANTHROPIC_BASE =
-  typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).__evenBridge
-    ? 'https://api.anthropic.com'
-    : '/api/anthropic';
+import { chat } from './openrouter';
+
+const TRANSLATE_MODEL = 'google/gemini-2.5-flash';
 
 const SYSTEM_PROMPT =
   'You are a real-time Hebrew-to-Russian translator. ' +
@@ -29,29 +24,16 @@ export async function translateToRussian(
   const trimmed = hebrew.trim();
   if (!trimmed) return '';
 
-  const response = await fetch(`${ANTHROPIC_BASE}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5',
+  return chat(
+    {
+      model: TRANSLATE_MODEL,
       max_tokens: 512,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: trimmed }],
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text().catch(() => '');
-    throw new Error(`Translate API: ${response.status} ${errText}`);
-  }
-
-  const data = (await response.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
-  const text = data.content?.find(b => b.type === 'text')?.text ?? '';
-  return text.trim();
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user',   content: trimmed },
+      ],
+    },
+    apiKey,
+  );
 }

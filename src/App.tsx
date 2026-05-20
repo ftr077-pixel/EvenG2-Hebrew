@@ -51,8 +51,8 @@ function loadMode(): AppMode {
   }
 }
 
-const DEEPGRAM_API_KEY   = import.meta.env.VITE_DEEPGRAM_API_KEY   ?? '';
-const ANTHROPIC_API_KEY  = import.meta.env.VITE_ANTHROPIC_API_KEY  ?? '';
+const DEEPGRAM_API_KEY    = import.meta.env.VITE_DEEPGRAM_API_KEY    ?? '';
+const OPENROUTER_API_KEY  = import.meta.env.VITE_OPENROUTER_API_KEY  ?? '';
 
 dbg.info('App loaded');
 dbg.info(`DG key: ${DEEPGRAM_API_KEY ? DEEPGRAM_API_KEY.slice(0, 8) + '...' : 'MISSING'}`);
@@ -91,7 +91,7 @@ export default function App() {
   // Translate newly-confirmed segments while in translate mode.
   useEffect(() => {
     if (mode !== 'translate') return;
-    if (!ANTHROPIC_API_KEY) return;
+    if (!OPENROUTER_API_KEY) return;
     const start = lastTranslatedRef.current;
     const total = stt.segments.length;
     if (total <= start) return;
@@ -101,7 +101,7 @@ export default function App() {
       const seg = stt.segments[i];
       if (!seg) continue;
       pendingTranslationsRef.current++;
-      void translateToRussian(seg.text, ANTHROPIC_API_KEY)
+      void translateToRussian(seg.text, OPENROUTER_API_KEY)
         .then(ru => setTranslations(t => ({ ...t, [i]: ru || '—' })))
         .catch(err => {
           dbg.error(`Translate ${i}: ${err instanceof Error ? err.message : String(err)}`);
@@ -184,13 +184,13 @@ export default function App() {
     refreshSessions();
 
     if (sessionMode === 'translate') return; // translate mode: no summary
-    if (!ANTHROPIC_API_KEY) return;
+    if (!OPENROUTER_API_KEY) return;
 
     setSummarizing(true);
     setSummary(null);
 
     try {
-      const result = await summarizeTranscript(segments, ANTHROPIC_API_KEY);
+      const result = await summarizeTranscript(segments, OPENROUTER_API_KEY);
       setSummary(result);
       saveSession({ ...partial, summary: result });
       refreshSessions();
