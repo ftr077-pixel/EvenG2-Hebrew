@@ -4,20 +4,15 @@
  * Used for both Hebrew→Russian translation (translate.ts) and the
  * post-session AI summary (summarize.ts).
  *
- * Transport:
- *   • Dev (Vite)        → /api/openrouter proxy (see vite.config.ts)
- *   • Even Hub WebView  → direct https://openrouter.ai (no browser CORS)
+ * OpenRouter exposes permissive CORS for browser apps, so we call the
+ * absolute URL in both dev and the Even Hub WebView — no proxy needed.
  *
- * OpenRouter expects:
- *   POST /api/v1/chat/completions
+ *   POST https://openrouter.ai/api/v1/chat/completions
  *   Authorization: Bearer <key>
  *   Optional: HTTP-Referer, X-Title (shown in dashboards / rankings)
  */
 
-const OPENROUTER_BASE =
-  typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).__evenBridge
-    ? 'https://openrouter.ai'      // Even Hub WebView
-    : '/api/openrouter';            // Dev: proxied by Vite
+const OPENROUTER_BASE = 'https://openrouter.ai';
 
 const APP_TITLE   = 'EvenG2 Hebrew';
 const APP_REFERER = 'https://github.com/ftr077-pixel/EvenG2-Hebrew';
