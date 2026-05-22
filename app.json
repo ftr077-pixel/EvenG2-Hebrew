@@ -1,7 +1,7 @@
 {
-  "package_id": "com.eveng2.hebrew16",
-  "name": "עברית v16",
-  "version": "16.0.0",
+  "package_id": "com.eveng2.hebrew17",
+  "name": "עברית v17",
+  "version": "17.0.0",
   "edition": "202601",
   "entrypoint": "index.html",
   "author": "EvenG2-Hebrew",
